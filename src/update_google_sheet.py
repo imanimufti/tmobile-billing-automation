@@ -239,7 +239,9 @@ class GoogleSheetsUpdater:
             one_time = f"${line['one_time_charges']:.2f}" if line['one_time_charges'] > 0 else ""
             credit = "$0.00"
             total = f"${total_amount:.2f}"
-            payment_status = "Pending"  # Default to Pending, will be updated by Gmail monitor
+            # Account holder pays T-Mobile directly, so their row starts as Paid.
+            account_holder_last4 = self.config.get('account_holder_last4')
+            payment_status = "Paid" if last4 == account_holder_last4 else "Pending"
             if line['is_removed']:
                 notes = f"Removed — ${line['total']:.2f} split equally across active lines"
             elif mi_extra > 0:
