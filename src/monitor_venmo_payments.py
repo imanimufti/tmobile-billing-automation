@@ -391,6 +391,41 @@ class PaymentMonitor:
 
     # -- Sheet I/O ------------------------------------------------------
 
+    def detect_current_tab(self) -> Optional[str]:
+        """Pick the most recent monthly tab (e.g. 'May 26') from the sheet —
+        the one whose <Mon> <YY> is <= today. Falls back to the closest
+        prior month if the current month hasn't been processed yet.
+        Returns None if no monthly tabs exist.
+        """
+        try:
+            meta = self.sheets_service.spreadsheets().get(
+                spreadsheetId=self.sheet_id
+            ).execute()
+        except HttpError as err:
+            print(f"Cannot list tabs to auto-detect: {err}")
+            return None
+
+        month_pat = re.compile(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{2})$')
+        monthly_tabs = []
+        for sheet in meta.get('sheets', []):
+            name = sheet['properties']['title']
+            m = month_pat.match(name)
+            if not m:
+                continue
+            mon_str, yr_str = m.groups()
+            mon_num = datetime.strptime(mon_str, '%b').month
+            yr_num = 2000 + int(yr_str)
+            monthly_tabs.append((datetime(yr_num, mon_num, 1), name))
+
+        if not monthly_tabs:
+            return None
+
+        today = datetime.now()
+        not_future = [(d, n) for d, n in monthly_tabs if d <= today]
+        pool = not_future if not_future else monthly_tabs
+        pool.sort(reverse=True)
+        return pool[0][1]
+
     def get_sheet_data(self, tab_name: str) -> List[Dict]:
         try:
             range_name = f"{tab_name}!A:H"
@@ -528,7 +563,8 @@ def main():
 
     parser = argparse.ArgumentParser(
         description='Monitor payment sources (Venmo email, SMS) and update the Google Sheet')
-    parser.add_argument('tab_name', help='Google Sheet tab name (e.g., "Mar 26")')
+    parser.add_argument('tab_name', nargs='?', default=None,
+                        help='Sheet tab name (e.g., "Mar 26"). Omit to auto-detect the most recent monthly tab.')
     parser.add_argument('--days', type=int, default=7, help='Days to search back (default: 7)')
     parser.add_argument('--credentials', default='credentials.json', help='Path to credentials.json')
     parser.add_argument('--source', choices=PaymentMonitor.SOURCE_CHOICES, default='all',
@@ -542,16 +578,25 @@ def main():
 
     try:
         monitor = PaymentMonitor()
-        # SMS-only dry-run doesn't need Google auth
+        # SMS-only dry-run doesn't need Google auth (and can't auto-detect)
         needs_google = args.source != 'sms' or not args.dry_run
         if needs_google:
             monitor.authenticate(args.credentials)
+
+        tab_name = args.tab_name
+        if not tab_name:
+            if not monitor.sheets_service:
+                raise SystemExit("tab_name required when running without Google auth")
+            tab_name = monitor.detect_current_tab()
+            if not tab_name:
+                raise SystemExit("Could not auto-detect any monthly tab in the sheet")
+            print(f"Auto-detected current tab: '{tab_name}'")
 
         if args.watch:
             print(f"Watch mode: checking every {args.interval}s. Ctrl+C to stop.")
             while True:
                 try:
-                    monitor.process_payments(args.tab_name, args.days,
+                    monitor.process_payments(tab_name, args.days,
                                              args.source, args.dry_run)
                     print(f"\nWaiting {args.interval} seconds...")
                     time.sleep(args.interval)
@@ -559,7 +604,7 @@ def main():
                     print("\nStopping watch mode...")
                     break
         else:
-            monitor.process_payments(args.tab_name, args.days,
+            monitor.process_payments(tab_name, args.days,
                                      args.source, args.dry_run)
     except Exception as e:
         print(f"Error: {e}")
