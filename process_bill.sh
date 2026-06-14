@@ -28,6 +28,17 @@ if [ -z "$MONTH" ]; then
     read -p "Enter the tab name for payment monitoring (e.g., 'Mar 26'): " MONTH
 fi
 
+# Step 1b: Offer to share the link in WhatsApp
+echo ""
+echo "========================================="
+echo "Share to WhatsApp"
+echo "========================================="
+read -p "Share the '$MONTH' breakdown to the WhatsApp group? (y/n): " SHARE_WA
+
+if [ "$SHARE_WA" = "y" ] || [ "$SHARE_WA" = "Y" ]; then
+    python3 src/share_to_whatsapp.py "$MONTH"
+fi
+
 # Step 2: Ask if user wants to start payment monitoring
 echo ""
 echo "========================================="

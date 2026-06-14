@@ -20,5 +20,13 @@
     "zelle_senders": ["20736"],
     "venmo_senders": ["86753"],
     "sms_payer_aliases": {}
+  },
+  "whatsapp": {
+    "group_invite_url": "",
+    "payment_methods": {
+      "Venmo": "@imani-mufti",
+      "Zelle / Apple Pay": "2134255760"
+    },
+    "message_template": "T-Mobile bill is up for {tab_name}: ${total}\nYour breakdown: {sheet_url}\n\nPay via:\n{payment_methods}"
   }
 }

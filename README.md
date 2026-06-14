@@ -133,6 +133,32 @@ This will:
 - Create/update a tab named "Mar 26" in your Google Sheet
 - Set all payment statuses to "Pending"
 
+### Step 1b (Optional): Share Breakdown to WhatsApp
+
+```bash
+# Dry-run: print the message and URL without touching clipboard or opening WhatsApp
+python3 src/share_to_whatsapp.py "Mar 26" --dry-run
+
+# Real run: copy message to clipboard, open WhatsApp Desktop
+python3 src/share_to_whatsapp.py "Mar 26"
+```
+
+This reads the bill total from cell `K1` of the target tab and builds a gid-anchored URL pointing straight at it, then drops a ready-to-send message on your clipboard. Configure the message in `src/config.json` under the `whatsapp` block:
+
+```json
+"whatsapp": {
+  "group_invite_url": "",
+  "payment_methods": {
+    "Venmo": "@imani-mufti",
+    "Zelle / Apple Pay": "2134255760"
+  },
+  "message_template": "T-Mobile bill is up for {tab_name}: ${total}\nYour breakdown: {sheet_url}\n\nPay via:\n{payment_methods}"
+}
+```
+
+- `group_invite_url` — optional. Paste your group's invite link (Group settings → Invite via link → Copy link) for a one-click deep-link into the group. Leave blank to land in WhatsApp's main window and pick the group manually.
+- `payment_methods` — dict of `label → handle`. Rendered as `• <label>: <handle>` bullets and substituted for `{payment_methods}` in the template.
+
 ### Step 2: Monitor Venmo Payments
 
 ```bash
