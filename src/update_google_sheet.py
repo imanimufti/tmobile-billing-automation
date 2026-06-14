@@ -218,7 +218,10 @@ class GoogleSheetsUpdater:
             credit = "$0.00"
             total = f"${line.get('total_per_person', line['total']):.2f}"
             payment_status = "Pending"  # Default to Pending, will be updated by Gmail monitor
-            notes = "Removed" if line['is_removed'] else ""
+            if line['is_removed']:
+                notes = f"Removed — ${line['total']:.2f} split equally across active lines"
+            else:
+                notes = ""
 
             values.append([
                 name,

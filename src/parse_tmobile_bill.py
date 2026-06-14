@@ -132,28 +132,39 @@ class TMobileBillParser:
         return Decimal(cleaned) if cleaned else Decimal('0')
 
     def _calculate_equal_portions(self):
-        """Calculate equal portion of bill for each active voice line"""
-        # Count active voice lines (not removed, not account)
+        """Calculate equal portion of bill for each active voice line.
+
+        Removed/unused voice lines have their full per-line total folded into
+        the shared pool so the burden is split equally across active lines
+        instead of sitting on the unused-line row.
+        """
         active_voice_lines = [
             line for line in self.bill_data['lines']
             if line['line_type'] == 'Voice' and not line['is_removed']
         ]
+        removed_voice_lines = [
+            line for line in self.bill_data['lines']
+            if line['line_type'] == 'Voice' and line['is_removed']
+        ]
 
         num_active_lines = len(active_voice_lines)
+        unused_burden = sum((line['total'] for line in removed_voice_lines), Decimal('0'))
 
         if num_active_lines > 0:
-            equal_portion = self.bill_data['plans_total'] / num_active_lines
+            equal_portion = (self.bill_data['plans_total'] + unused_burden) / num_active_lines
 
-            # Add equal portion to each line
             for line in self.bill_data['lines']:
                 if line['line_type'] == 'Voice' and not line['is_removed']:
                     line['equal_portion'] = equal_portion
-                    # Recalculate total per person
                     line['total_per_person'] = (
                         equal_portion +
                         line['equipment'] +
                         line['one_time_charges']
                     )
+                elif line['line_type'] == 'Voice' and line['is_removed']:
+                    # Cost is redistributed; zero out the row so it doesn't double-bill.
+                    line['equal_portion'] = Decimal('0')
+                    line['total_per_person'] = Decimal('0')
                 else:
                     line['equal_portion'] = Decimal('0')
                     line['total_per_person'] = line['total']
