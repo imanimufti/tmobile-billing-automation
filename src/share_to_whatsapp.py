@@ -39,13 +39,29 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
     import pymupdf
 
+# Quartz lets us post hardware-grade keyboard events. WhatsApp Desktop drops
+# AppleScript-synthesized ⌘V for image paste but accepts CGEvent.
+try:
+    from Quartz import (
+        CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags,
+        kCGSessionEventTap, kCGEventFlagMaskCommand,
+    )
+    _HAS_QUARTZ = True
+except ImportError:
+    _HAS_QUARTZ = False
+
 import urllib.request
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/drive',
 ]
+
+
+# US ANSI key codes
+_KEY_V = 9
+_KEY_RETURN = 36
 
 
 def authenticate(credentials_path: str = "credentials.json"):
@@ -199,6 +215,56 @@ def copy_image_to_clipboard(image_path: str) -> None:
     subprocess.run(['osascript', '-e', script], check=True)
 
 
+def _post_cmd_key(key_code: int) -> bool:
+    """Post a hardware-grade ⌘+<key> event via Quartz CGEvent. Returns False
+    if Quartz is unavailable (caller can fall back to osascript)."""
+    if not _HAS_QUARTZ:
+        return False
+    down = CGEventCreateKeyboardEvent(None, key_code, True)
+    CGEventSetFlags(down, kCGEventFlagMaskCommand)
+    CGEventPost(kCGSessionEventTap, down)
+    time.sleep(0.05)
+    up = CGEventCreateKeyboardEvent(None, key_code, False)
+    CGEventSetFlags(up, kCGEventFlagMaskCommand)
+    CGEventPost(kCGSessionEventTap, up)
+    return True
+
+
+def ensure_sheet_shareable(creds, spreadsheet_id: str) -> bool:
+    """Make sure 'anyone with the link' can view + comment on the sheet.
+    Idempotent — returns True if a permission was created/updated, False if
+    the right permission was already in place."""
+    if creds.expired and creds.refresh_token:
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+
+    drive = build('drive', 'v3', credentials=creds)
+    existing = drive.permissions().list(
+        fileId=spreadsheet_id,
+        fields='permissions(id,type,role)',
+        supportsAllDrives=True,
+    ).execute()
+
+    for perm in existing.get('permissions', []):
+        if perm.get('type') != 'anyone':
+            continue
+        if perm.get('role') in ('commenter', 'writer', 'owner'):
+            return False  # Already sufficient
+        # Upgrade existing 'anyone' permission to commenter
+        drive.permissions().update(
+            fileId=spreadsheet_id,
+            permissionId=perm['id'],
+            body={'role': 'commenter'},
+        ).execute()
+        return True
+
+    drive.permissions().create(
+        fileId=spreadsheet_id,
+        body={'type': 'anyone', 'role': 'commenter'},
+    ).execute()
+    return True
+
+
 def render_payment_methods(methods: Dict[str, str]) -> str:
     return "\n".join(f"• {label}: {handle}" for label, handle in methods.items())
 
@@ -261,34 +327,42 @@ def send_image_with_caption_via_applescript(
       2. Swap clipboard to the caption text and ⌘V (fills the caption field)
       3. ⌘Return to send (Return alone usually adds a newline in the caption)
     """
+    # Image paste in WhatsApp Desktop only fires on hardware-grade keystrokes.
+    # AppleScript's `keystroke` and even `key code` events are dropped by
+    # WhatsApp's image-paste handler. We post via Quartz CGEvent instead,
+    # which the OS treats as indistinguishable from a real keyboard press.
+
+    if not _HAS_QUARTZ:
+        raise RuntimeError(
+            "Quartz (pyobjc-framework-Quartz) is required for reliable image "
+            "paste into WhatsApp Desktop. Install with:\n"
+            "  python3 -m pip install --user pyobjc-framework-Quartz"
+        )
+
     # 1. Image on clipboard
     copy_image_to_clipboard(image_path)
 
-    # 2. Activate WhatsApp + paste image to open the preview dialog
-    paste_image = f'''
-    tell application "WhatsApp" to activate
-    delay {open_delay}
-    tell application "System Events"
-        keystroke "v" using {{command down}}
-    end tell
-    '''
-    subprocess.run(['osascript', '-e', paste_image], check=True)
+    # 2. Activate WhatsApp and wait for the window to settle
+    subprocess.run(['osascript', '-e', 'tell application "WhatsApp" to activate'], check=True)
+    time.sleep(open_delay)
 
-    # Give the preview dialog time to render and focus the caption field
+    # 3. Hardware-grade ⌘V — opens the image preview dialog with caption focus
+    _post_cmd_key(_KEY_V)
     time.sleep(preview_delay)
 
-    # 3. Swap clipboard to caption text
+    # 4. Swap clipboard to caption text
     copy_to_clipboard(caption)
 
-    # 4. Paste caption into focused caption field, then send with ⌘Return
-    paste_and_send = f'''
-    tell application "System Events"
-        keystroke "v" using {{command down}}
-        delay {caption_delay}
-        keystroke return using {{command down}}
-    end tell
-    '''
-    subprocess.run(['osascript', '-e', paste_and_send], check=True)
+    # 5. Re-activate (focus may have drifted)
+    subprocess.run(['osascript', '-e', 'tell application "WhatsApp" to activate'], check=True)
+    time.sleep(0.4)
+
+    # 6. Paste caption into the focused caption field
+    _post_cmd_key(_KEY_V)
+    time.sleep(caption_delay)
+
+    # 7. Send with ⌘Return
+    _post_cmd_key(_KEY_RETURN)
 
 
 def main():
@@ -307,6 +381,8 @@ def main():
                         help='Skip the PNG breakdown image — send the text link message only')
     parser.add_argument('--render-only', action='store_true',
                         help='Render the PNG breakdown to a temp file and exit. Prints the path.')
+    parser.add_argument('--shareable-only', action='store_true',
+                        help='Just set the sheet permission to anyone-with-link can comment, then exit. No render, no WhatsApp.')
     parser.add_argument('--open-delay', type=float, default=4.0,
                         help='Seconds to wait after launching WhatsApp before the first paste (default: 4.0)')
     args = parser.parse_args()
@@ -325,6 +401,22 @@ def main():
         sys.exit(1)
 
     sheets, creds = authenticate(args.credentials)
+
+    # Make sure the sheet is viewable + commentable to anyone with the link,
+    # so family members can open it without an access request. Idempotent.
+    try:
+        if ensure_sheet_shareable(creds, spreadsheet_id):
+            print("✓ Set sheet permission: anyone with link can view + comment")
+        else:
+            print("✓ Sheet already shared to anyone with link")
+    except HttpError as err:
+        print(f"⚠  Could not update sheet sharing permission: {err}")
+        if args.shareable_only:
+            sys.exit(1)
+
+    if args.shareable_only:
+        return
+
     data = fetch_tab_data(sheets, spreadsheet_id, args.tab_name)
     sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={data['gid']}"
 
