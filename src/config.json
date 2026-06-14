@@ -26,7 +26,7 @@
     "sms_payer_aliases": {}
   },
   "whatsapp": {
-    "group_invite_url": "",
+    "group_invite_url": "https://chat.whatsapp.com/FGeH7yvJN1z4GAPghjCQUz",
     "payment_methods": {
       "Venmo": "@imani-mufti",
       "Zelle / Apple Pay": "2134255760"
