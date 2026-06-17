@@ -25,6 +25,7 @@
     ]
   },
   "payment_match_months": 3,
+  "payment_overpay_tolerance": 1.0,
   "reminders": {
     "enabled": true,
     "first_after_days": 7,

@@ -364,6 +364,8 @@ class PaymentMonitor:
         # How many monthly tabs back (including the anchor month) to consider
         # when matching a lump-sum payment that spans multiple months.
         self.match_months = int(self.config.get('payment_match_months', 3))
+        # How much a payment may exceed the charges it covers (round-ups).
+        self.overpay_tol = float(self.config.get('payment_overpay_tolerance', 1.00))
 
         self.gmail_service = None
         self.sheets_service = None
@@ -582,15 +584,16 @@ class PaymentMonitor:
         return group
 
     @staticmethod
-    def _best_subset(charges: List[Dict], amount: float,
-                     payer: str, tol: float = 0.01) -> Optional[List[Dict]]:
-        """Find the subset of `charges` whose totals sum to `amount`.
+    def _best_subset(charges: List[Dict], amount: float, payer: str,
+                     under_tol: float = 0.01, over_tol: float = 1.00) -> Optional[List[Dict]]:
+        """Find the subset of `charges` the payment settles.
 
         People often pay several months (and, for couples, several people) in a
-        single lump sum, so we search combinations rather than single rows.
-        `charges` is assumed newest-first. Among subsets that sum correctly we
-        prefer: more charges cleared, then ones including the payer's own
-        charge, then the most-recent months.
+        single lump sum, so we search combinations rather than single rows. We
+        also tolerate small **round-ups** — a payment may exceed the charges it
+        covers by up to `over_tol` (e.g. $46.46 owed paid as $46.50). `charges`
+        is newest-first. Among qualifying subsets prefer: more charges cleared,
+        then the closest amount, then the payer's own charge, then recent months.
         """
         n = len(charges)
         if n == 0:
@@ -606,12 +609,14 @@ class PaymentMonitor:
             for i in range(n):
                 if mask & (1 << i):
                     total += charges[i]['total']
-            if abs(total - amount) >= tol:
+            diff = amount - total  # >= 0 means the payment covers these charges
+            if diff < -under_tol or diff > over_tol:
                 continue
             idxs = [i for i in range(n) if mask & (1 << i)]
             has_own = any(charges[i]['name'] == payer for i in idxs)
-            # Lower indices are more recent; -sum(idxs) favours recent months.
-            key = (len(idxs), has_own, -sum(idxs))
+            # Prefer most charges cleared, then smallest over-payment (round(...)
+            # to avoid float ties), then payer's own, then recent (low indices).
+            key = (len(idxs), -round(abs(diff), 2), has_own, -sum(idxs))
             if best_key is None or key > best_key:
                 best_key = key
                 best_idxs = idxs
@@ -637,7 +642,7 @@ class PaymentMonitor:
             c for c in charges
             if c['name'] in group and c['payment_status'].lower() != 'paid'
         ]
-        subset = self._best_subset(pending, payment['amount'], payer)
+        subset = self._best_subset(pending, payment['amount'], payer, over_tol=self.overpay_tol)
         if not subset:
             return None
 
