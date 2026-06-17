@@ -1,26 +1,25 @@
 # T-Mobile Family Plan Automation
 
-Automates T-Mobile family plan billing — parses monthly bills, calculates per-line costs, updates Google Sheets, and tracks payments via Venmo notifications.
+Fully automated, unattended T-Mobile family-plan billing. Each month it fetches
+the bill from T-Mobile, splits it per line into Google Sheets, posts the
+breakdown to the family WhatsApp group, tracks Venmo / Zelle / Apple Cash
+payments, and DMs reminders to anyone who hasn't paid — all on a schedule,
+hands-off. See **[Unattended automation](#unattended-automation)**.
 
-## Project Status
+## Status — live & fully automated
 
-### ✅ Completed
+A macOS `launchd` agent runs the whole monthly cycle with no manual steps:
 
-- [x] **PDF Bill Parser** - Extracts per-line costs from T-Mobile PDFs (tested with March 2026 bill)
-- [x] **Configuration System** - Phone number to name mapping configured for 13 lines
-- [x] **Google Sheets Integration Script** - Creates/updates monthly tabs with billing data
-- [x] **Gmail/Venmo Payment Monitor** - Smart matching using amount + name (fuzzy)
-- [x] **Documentation** - README, requirements.txt, helper scripts
-- [x] **Helper Script** - `process_bill.sh` for quick workflow
+- ✅ **Fetch** the bill from T-Mobile (headless browser + seeded session; from the 20th)
+- ✅ **Parse** per-line costs and build that month's Google Sheet tab
+- ✅ **Announce** the breakdown to the family WhatsApp group (headless WhatsApp Web)
+- ✅ **Track payments** across Venmo, Zelle, and Apple Cash — couples-aware,
+  multi-month lump sums, and tolerant of small round-ups
+- ✅ **Remind** anyone unpaid via private WhatsApp DM (first at 7 days, then every 5)
 
-### 🚧 To Do
-
-- [ ] **Set up Google API credentials** - Enable Gmail API + Google Sheets API
-- [ ] **Test Google Sheets integration** - Verify tab creation and data upload
-- [ ] **Test Venmo payment monitoring** - Verify Gmail search and payment matching
-- [ ] **End-to-end testing** - Complete workflow from PDF → Sheet → Payment tracking
-- [ ] **WhatsApp/SMS notifications** (Future) - Send breakdown to family group chat
-- [ ] **Automatic bill download** (Future) - Fetch bills directly from T-Mobile
+The only things that ever need you: an Apple Cash payment from an un-mapped
+number (no name attached), a rare T-Mobile re-login if the saved session expires,
+or a one-time session re-seed. See [What still needs you](#what-still-needs-you).
 
 ## Features
 
@@ -44,7 +43,10 @@ tmobile-family-plan-automation/
 │   ├── monitor_venmo_payments.py   # Gmail/Venmo/Zelle/Apple Cash payment monitor
 │   ├── share_to_whatsapp.py        # Posts the breakdown to the WhatsApp group
 │   ├── fetch_tmobile_bill.py       # Best-effort bill download (Playwright + Keychain)
-│   └── run_pipeline.py             # Unattended orchestrator (run by launchd)
+│   ├── run_pipeline.py             # Unattended orchestrator (run by launchd)
+│   └── organize_drive.py           # One-off: file the sheet under a Drive folder
+├── whatsapp/                       # Headless WhatsApp Web sender (Node)
+│   └── send.js                     # seed / send / send-batch / list-members
 ├── launchd/                        # launchd agent template
 ├── scripts/                        # install/uninstall the launchd agent
 ├── credentials.json                # Google API credentials (you need to create this)
@@ -125,32 +127,36 @@ To stop the automation: `./scripts/uninstall_launchd.sh`. The selectors/URLs the
 T-Mobile fetcher uses live in `config.json` under `tmobile` so they can be
 re-tuned without code changes if the site moves things around.
 
-## Getting Started Tomorrow
+## What still needs you
 
-To continue where you left off:
+In a normal month where everyone pays by Venmo/Zelle, your involvement is zero.
+The exceptions are inherent, not bugs:
 
-1. **Set up Google API credentials** (15-20 minutes):
-   - Go to https://console.cloud.google.com/
-   - Create project and enable Gmail API + Google Sheets API
-   - Download `credentials.json` to project root
-   - See detailed steps in "Setup" section below
+- **Apple Cash from an un-mapped number** — Apple Cash carries only a phone
+  number, no name, so it can't auto-attribute until you map the number in
+  `sms.sms_payer_aliases`. (Venmo and Zelle include names, so they're fine.)
+- **An odd amount** — a payment that's *less* than owed, or matches no
+  combination even with the round-up window, stays Pending for you to review.
+- **A re-seed** — the WhatsApp Web or T-Mobile browser session can expire
+  occasionally; re-run the relevant seed command (above). If a T-Mobile re-login
+  hits the passkey, you get a notification and can drop the PDF in `bills/`
+  instead — the pipeline continues either way.
+- **Plan changes** — someone joins/leaves or changes number → update
+  `config.json` (name mapping + `reminders.whatsapp_numbers`).
+- **The Mac must be awake & logged in** for scheduled runs (sessions + Full Disk
+  Access are already set). Optional: `sudo pmset repeat wakeorpoweron MTWRFSU 07:55:00`.
 
-2. **Test the system**:
-   ```bash
-   # Test with your existing March 2026 bill
-   python3 src/update_google_sheet.py bills/SummaryBillMar2026.pdf
+## Manual / override commands
 
-   # Test payment monitoring (searches last 7 days)
-   python3 src/monitor_venmo_payments.py "Mar 26" --days 7
-   ```
+The pipeline runs everything automatically, but each step can be run by hand:
 
-3. **Run in production**:
-   ```bash
-   # Use the helper script for new bills
-   ./process_bill.sh bills/SummaryBillApr2026.pdf
-   ```
-
----
+```bash
+python3 src/run_pipeline.py --dry-run         # preview a full run, change nothing
+python3 src/run_pipeline.py                    # run all stages now
+python3 src/update_google_sheet.py bills/<bill>.pdf   # just parse + build the sheet
+python3 src/monitor_venmo_payments.py --days 30       # just re-check payments
+python3 src/run_pipeline.py --remind-tab "Apr 26"     # send reminders for a month
+```
 
 ## Setup
 
@@ -278,30 +284,30 @@ python3 src/update_google_sheet.py bills/SummaryBillApr2026.pdf
 python3 src/monitor_venmo_payments.py "Apr 26" --watch --interval 300
 ```
 
-## Payment Matching Logic
+## Payment matching logic
 
-The Venmo monitor uses **both** amount and name to match payments:
+The monitor pulls from **Venmo** (Gmail), **Zelle**, and **Apple Cash** (macOS
+Messages `chat.db`), and matches each payment to a person by name + amount:
 
-1. **Amount Match**: Payment amount must equal "Total per person" (within $0.01)
-2. **Name Match**: Person's name from sheet must appear in Venmo handle (case-insensitive)
+1. **Name** — the sender's name must contain the person's sheet name
+   (case-insensitive). Apple Cash carries no name, so it's matched by a mapped
+   number (`sms.sms_payer_aliases`).
+2. **Amount** — the payment must cover the charge(s) owed, tolerating a small
+   **round-up** (`payment_overpay_tolerance`, default $1) — e.g. $46.46 paid as
+   $46.50 still clears. Underpayments stay Pending on purpose.
 
-**Examples:**
-- Sheet name: "Waleed" → Matches: `@waleed123`, `@waleed-ahmed`, `@my-waleed`
-- Sheet name: "Ahmad" → Matches: `@ahmad`, `@ahmad_ali`, `@iahmad`
+It also handles the messy real-world cases:
 
-## Automation Ideas
+- **Couples** (`pays_for`) — when Qasim pays, Tuba's share is cleared too, and a
+  reminder for Tuba's share is rolled into Qasim's DM.
+- **Multi-month lump sums** — one payment covering several months is matched by
+  finding the combination of outstanding charges that sums to it (within the
+  round-up window); `payment_match_months` controls how far back to look.
 
-### Cron Job (Run every 30 minutes)
+Already-paid rows are skipped, so every run is safe to repeat.
 
-Add to crontab (`crontab -e`):
-
-```bash
-*/30 * * * * cd /path/to/tmobile-family-plan-automation && python3 src/monitor_venmo_payments.py "Apr 26" --days 7
-```
-
-### WhatsApp/SMS Notifications (Future Feature)
-
-Coming soon: Automatically send breakdown to family group chat when bill is processed.
+Scheduling is handled by the launchd agent (see
+[Unattended automation](#unattended-automation)) — no cron needed.
 
 ## Troubleshooting
 
