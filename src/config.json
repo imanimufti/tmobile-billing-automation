@@ -22,6 +22,9 @@
   "pays_for": {
     "Qasim": [
       "Tuba"
+    ],
+    "Ahmad": [
+      "Iqra"
     ]
   },
   "payment_match_months": 3,
