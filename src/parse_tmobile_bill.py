@@ -22,8 +22,12 @@ except ImportError:
 class TMobileBillParser:
     """Parser for T-Mobile PDF bills"""
 
-    def __init__(self, pdf_path: str):
+    def __init__(self, pdf_path: str, equipment_owners: Optional[Dict] = None):
         self.pdf_path = Path(pdf_path)
+        # Map of {installment_line_last4: owner_last4}. The equipment installment
+        # on a removed/unused line (e.g. a financed phone) is charged to its owner
+        # instead of being split across everyone.
+        self.equipment_owners = equipment_owners or {}
         self.bill_data = {
             'total_due': Decimal('0'),
             'plans_total': Decimal('0'),
@@ -159,7 +163,21 @@ class TMobileBillParser:
         ]
 
         num_active_lines = len(active_voice_lines)
-        unused_burden = sum((line['total'] for line in removed_voice_lines), Decimal('0'))
+        # Removed lines whose cost is reassigned to a specific owner (e.g. an
+        # equipment installment on an unused line) are NOT pooled — their charge
+        # follows the owner instead of being split across active lines.
+        reassigned_lines = [
+            line for line in removed_voice_lines
+            if line['last4'] in self.equipment_owners
+        ]
+        for line in reassigned_lines:
+            line['reassigned_to'] = self.equipment_owners[line['last4']]
+            line['reassign_amount'] = line['total']
+        unused_burden = sum(
+            (line['total'] for line in removed_voice_lines
+             if line['last4'] not in self.equipment_owners),
+            Decimal('0'),
+        )
         mobile_internet_plans = sum((line['plans'] for line in mobile_internet_lines), Decimal('0'))
 
         if num_active_lines > 0:
@@ -234,7 +252,13 @@ def main():
         sys.exit(1)
 
     try:
-        parser = TMobileBillParser(pdf_path)
+        import json
+        equipment_owners = {}
+        cfg_path = Path(__file__).with_name('config.json')
+        if cfg_path.exists():
+            with open(cfg_path) as f:
+                equipment_owners = json.load(f).get('equipment_owners', {})
+        parser = TMobileBillParser(pdf_path, equipment_owners=equipment_owners)
         bill_data = parser.parse()
         parser.print_summary()
 

@@ -243,6 +243,21 @@ class GoogleSheetsUpdater:
                 mi_extras_by_owner.get(owner_last4, Decimal('0')) + line['total']
             )
 
+        # Build per-owner equipment add-ons. An installment on a removed/unused
+        # line (tagged by the parser) is charged in full to its owner rather than
+        # split across active lines.
+        eqp_extras_by_owner: Dict[str, Decimal] = {}
+        eqp_sources_by_owner: Dict[str, list] = {}
+        for line in bill_data['lines']:
+            owner_last4 = line.get('reassigned_to')
+            if not owner_last4:
+                continue
+            eqp_extras_by_owner[owner_last4] = (
+                eqp_extras_by_owner.get(owner_last4, Decimal('0'))
+                + line.get('reassign_amount', Decimal('0'))
+            )
+            eqp_sources_by_owner.setdefault(owner_last4, []).append(line['last4'])
+
         # Data rows - map phone numbers to names
         for line in bill_data['lines']:
             if line['line_type'] == 'Account':
@@ -255,8 +270,9 @@ class GoogleSheetsUpdater:
             name = self.phone_mapping.get(last4, f"Unknown ({last4})")
 
             mi_extra = mi_extras_by_owner.get(last4, Decimal('0'))
-            equipment_amount = line['equipment'] + mi_extra
-            total_amount = line.get('total_per_person', line['total']) + mi_extra
+            eqp_extra = eqp_extras_by_owner.get(last4, Decimal('0'))
+            equipment_amount = line['equipment'] + mi_extra + eqp_extra
+            total_amount = line.get('total_per_person', line['total']) + mi_extra + eqp_extra
 
             equal_portion = f"${line.get('equal_portion', 0):.2f}"
             equipment = f"${equipment_amount:.2f}" if equipment_amount > 0 else ""
@@ -266,12 +282,22 @@ class GoogleSheetsUpdater:
             # Account holder pays T-Mobile directly, so their row starts as Paid.
             account_holder_last4 = self.config.get('account_holder_last4')
             payment_status = "Paid" if last4 == account_holder_last4 else "Pending"
-            if line['is_removed']:
-                notes = f"Removed — ${line['total']:.2f} split equally across active lines"
-            elif mi_extra > 0:
-                notes = f"Includes ${mi_extra:.2f} Mobile Internet"
-            else:
-                notes = ""
+            note_parts = []
+            if line.get('reassigned_to'):
+                owner_name = self.phone_mapping.get(line['reassigned_to'], line['reassigned_to'])
+                note_parts.append(
+                    f"Installment ${line.get('reassign_amount', 0):.2f} charged to {owner_name}"
+                )
+            elif line['is_removed']:
+                note_parts.append(
+                    f"Removed — ${line['total']:.2f} split equally across active lines"
+                )
+            if mi_extra > 0:
+                note_parts.append(f"Includes ${mi_extra:.2f} Mobile Internet")
+            if eqp_extra > 0:
+                srcs = ", ".join(eqp_sources_by_owner.get(last4, []))
+                note_parts.append(f"Includes ${eqp_extra:.2f} installment ({srcs})")
+            notes = "; ".join(note_parts)
 
             values.append([
                 name,

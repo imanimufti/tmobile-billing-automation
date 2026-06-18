@@ -202,7 +202,8 @@ def stage_process(state: Dict, tab: str, pdf: Optional[Path], dry_run: bool) -> 
         return
 
     print(f"[process] Parsing {pdf.name} and building tab '{tab}'...")
-    bill_data = TMobileBillParser(str(pdf)).parse()
+    equipment_owners = updater.config.get("equipment_owners", {})
+    bill_data = TMobileBillParser(str(pdf), equipment_owners=equipment_owners).parse()
     updater.update_sheet(bill_data, tab)
     ms["sheet_done"] = True
     save_state(state)
