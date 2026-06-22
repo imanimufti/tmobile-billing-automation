@@ -127,6 +127,47 @@ To stop the automation: `./scripts/uninstall_launchd.sh`. The selectors/URLs the
 T-Mobile fetcher uses live in `config.json` under `tmobile` so they can be
 re-tuned without code changes if the site moves things around.
 
+## Remote trigger (run it from your phone)
+
+The pipeline runs itself on a schedule, but when you're **away from the Mac** and
+want to kick a run *now* (e.g. "the bill just dropped"), use the **Run T-Mobile
+Pipeline** GitHub Actions workflow (`.github/workflows/run-pipeline.yml`).
+
+Because the pipeline is macOS-local and secret-bound (Keychain, `credentials.json`,
+seeded Playwright + WhatsApp Web sessions, Messages `chat.db`), it can only run on
+*your* Mac — a cloud runner can't reach it. So the workflow runs on a **self-hosted
+runner installed on that Mac**; the trigger button lives on GitHub (phone/web/API)
+while the work still happens locally.
+
+One-time setup, on the Mac:
+
+```bash
+# 1. Get a runner registration token:
+#    repo -> Settings -> Actions -> Runners -> New self-hosted runner -> macOS
+#    (copy the token from the ./config.sh line; it expires in ~1 hour)
+
+# 2. Install + start the runner (label: tmobile), as a GUI-session LaunchAgent
+./scripts/install_github_runner.sh <registration-token>
+```
+
+The runner installs via `svc.sh` so it runs inside your logged-in GUI session and
+inherits the same Full Disk Access / Accessibility you already granted the launchd
+agent. If your install dir isn't the default
+(`/Users/imanimufti/Projects/tmobile-billing-automation`), set the repo variable
+**`TMOBILE_PROJECT_DIR`** (Settings → Secrets and variables → Actions → Variables)
+to its path — the workflow `cd`s there so it uses your real seeded sessions, not a
+throwaway checkout.
+
+Then trigger from anywhere:
+
+- **GitHub mobile app** → Actions → *Run T-Mobile Pipeline* → **Run workflow**
+- **CLI:** `gh workflow run run-pipeline.yml`
+- **API:** `POST /repos/imanimufti/tmobile-billing-automation/actions/workflows/run-pipeline.yml/dispatches`
+
+Inputs let you tweak a run: `dry_run` (preview, change nothing), `days` (payment
+look-back window), and `skip_fetch` (use a PDF already in `bills/`). A `concurrency`
+group ensures two runs never drive the Mac at once.
+
 ## What still needs you
 
 In a normal month where everyone pays by Venmo/Zelle, your involvement is zero.

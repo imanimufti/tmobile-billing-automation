@@ -1,0 +1,75 @@
+name: Run T-Mobile Pipeline
+
+# Remote trigger for the monthly billing pipeline.
+#
+# The pipeline is a macOS-local automation (Keychain, seeded Playwright + WhatsApp
+# Web sessions, Messages chat.db, credentials.json) so it can ONLY run on your own
+# Mac. This workflow therefore runs on a *self-hosted runner* installed on that Mac
+# (see scripts/install_github_runner.sh). GitHub-hosted runners can't reach your
+# machine or your secrets, so they are deliberately not used.
+#
+# Trigger it from anywhere — the GitHub mobile app (Actions -> Run workflow),
+# `gh workflow run run-pipeline.yml`, or the REST API — no Mac access needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only — report what each stage would do, change nothing"
+        type: boolean
+        default: false
+      days:
+        description: "Payment look-back window for the monitor (days)"
+        type: string
+        default: "7"
+      skip_fetch:
+        description: "Skip the T-Mobile download this run (use a PDF already in bills/)"
+        type: boolean
+        default: false
+
+# Never let two runs drive the Mac (Keychain / WhatsApp / browser) at once.
+concurrency:
+  group: tmobile-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    # Matches the labels set by scripts/install_github_runner.sh. The runner must
+    # live in your logged-in GUI session so it inherits Full Disk Access /
+    # Accessibility, exactly like the launchd agent does.
+    runs-on: [self-hosted, macOS, tmobile]
+    timeout-minutes: 30
+
+    steps:
+      - name: Run the pipeline on the Mac
+        env:
+          # Canonical install dir on the Mac — the one holding credentials.json and
+          # the seeded state/, tmobile_profile/, .wwebjs_auth/ that the run needs.
+          # Override per-machine with a repo variable: Settings -> Secrets and
+          # variables -> Actions -> Variables -> TMOBILE_PROJECT_DIR.
+          PROJECT_DIR: ${{ vars.TMOBILE_PROJECT_DIR || '/Users/imanimufti/Projects/tmobile-billing-automation' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DAYS: ${{ inputs.days }}
+          SKIP_FETCH: ${{ inputs.skip_fetch }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "::error::PROJECT_DIR not found: $PROJECT_DIR" \
+                 "(set the TMOBILE_PROJECT_DIR repo variable to your install path)"
+            exit 1
+          fi
+          cd "$PROJECT_DIR"
+
+          # Run whatever code is currently checked out in the canonical dir — pull
+          # latest yourself there if you want, so seeded sessions stay put.
+          ARGS=(--days "${DAYS:-7}")
+          [ "${DRY_RUN}" = "true" ]    && ARGS+=(--dry-run)
+          [ "${SKIP_FETCH}" = "true" ] && ARGS+=(--skip-fetch)
+
+          PY="$(command -v python3)"
+          echo "Project: $PROJECT_DIR"
+          echo "Running: $PY src/run_pipeline.py ${ARGS[*]}"
+          echo "::group::pipeline output"
+          "$PY" src/run_pipeline.py "${ARGS[@]}"
+          echo "::endgroup::"
