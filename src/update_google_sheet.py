@@ -278,7 +278,11 @@ class GoogleSheetsUpdater:
             equal_portion = f"${line.get('equal_portion', 0):.2f}"
             equipment = f"${equipment_amount:.2f}" if equipment_amount > 0 else ""
             one_time = f"${line['one_time_charges']:.2f}" if line['one_time_charges'] > 0 else ""
-            credit = "$0.00"
+            # A negative equipment amount is a credit (e.g. a promo credit larger
+            # than the installment). Surface it in the Credit column rather than
+            # hiding it behind a blank Equipment cell and a hardcoded $0.00, so a
+            # near-zero total is explained.
+            credit = f"-${-equipment_amount:.2f}" if equipment_amount < 0 else "$0.00"
             total = f"${total_amount:.2f}"
             # Account holder pays T-Mobile directly, so their row starts as Paid.
             account_holder_last4 = self.config.get('account_holder_last4')
