@@ -105,6 +105,30 @@ def current_pdf_path(when: Optional[datetime] = None) -> Path:
     return ROOT / "bills" / f"SummaryBill{(when or datetime.now()).strftime('%b%Y')}.pdf"
 
 
+def newest_bill_on_disk():
+    """The most recent bill PDF in bills/ by statement month, as (tab, path).
+
+    Lets the pipeline catch up a late bill — one dropped in after the calendar
+    month rolled over — instead of silently skipping it because process/announce
+    were pinned to the calendar month. Only the NEWEST bill is considered, so
+    older, already-handled months are never picked up and re-announced.
+    """
+    best = None
+    for p in (ROOT / "bills").glob("SummaryBill*.pdf"):
+        m = re.match(r'SummaryBill([A-Z][a-z]{2})(\d{4})\.pdf$', p.name)
+        if not m:
+            continue
+        try:
+            when = datetime.strptime(f"{m.group(1)} {m.group(2)}", "%b %Y")
+        except ValueError:
+            continue
+        if best is None or when > best[0]:
+            best = (when, p)
+    if best is None:
+        return None, None
+    return current_tab(best[0]), best[1]
+
+
 def stage_acquire(state: Dict, tab: str, dry_run: bool) -> Optional[Path]:
     """Ensure the current month's PDF exists; fetch it (≤ once/day) if missing."""
     ms = month_state(state, tab)
@@ -293,6 +317,15 @@ def stage_remind(monitor, state: Dict, tab: str, dry_run: bool) -> None:
     repeat_every = int(rcfg.get("repeat_every_days", 5))
 
     ms = month_state(state, tab)
+    # Never DM people about a bill that was never posted to the group. Without
+    # this, a late bill whose announce was skipped (calendar-month mismatch)
+    # still triggered reminders off the PDF's issue date — people got individual
+    # nags for a breakdown they'd never seen. Announce first; reminders follow.
+    if not ms.get("announced"):
+        print(f"[remind] '{tab}' has not been announced to the group — skipping "
+              "reminders (announce first, or record a manual post with "
+              f"--mark-announced '{tab}')")
+        return
     ref_iso = ms.get("announced_at")
     ref = datetime.fromisoformat(ref_iso) if ref_iso else _tab_pdf_issue_date(tab)
     if not ref:
@@ -385,7 +418,23 @@ def main():
                         help="Never attempt the T-Mobile download this run")
     parser.add_argument("--remind-tab", default=None,
                         help="Run ONLY the reminder stage for this tab (e.g. 'Apr 26'), then exit")
+    parser.add_argument("--mark-announced", default=None, metavar="TAB",
+                        help="Record that TAB (e.g. 'Aug 26') was posted to the group "
+                             "manually: sets announced (starting the reminder clock now) "
+                             "so the pipeline won't re-post it and reminders can run. Exits.")
     args = parser.parse_args()
+
+    # Ad-hoc: reconcile state after a manual group post, then exit.
+    if args.mark_announced:
+        st = load_state()
+        ms = month_state(st, args.mark_announced)
+        ms["pdf_fetched"] = True
+        ms["sheet_done"] = True
+        ms["announced"] = True
+        ms["announced_at"] = datetime.now().isoformat()
+        save_state(st)
+        print(f"Marked '{args.mark_announced}' as announced at {ms['announced_at']}")
+        return
 
     # Ad-hoc: send reminders for a specific past month, then exit.
     if args.remind_tab:
@@ -416,8 +465,19 @@ def main():
         else:
             pdf = stage_acquire(state, tab, args.dry_run)
 
-        stage_process(state, tab, pdf, args.dry_run)
-        stage_announce(state, tab, args.dry_run)
+        # Process/announce the NEWEST bill on disk rather than the calendar
+        # month. Normally they're the same; when a bill is dropped in after the
+        # month rolls over, this catches it up instead of skipping it (which
+        # previously left reminders firing for a month never announced).
+        bill_tab, bill_pdf = newest_bill_on_disk()
+        if bill_tab is None:
+            bill_tab, bill_pdf = tab, pdf
+        elif bill_tab != tab:
+            print(f"[pipeline] Newest bill on disk is '{bill_tab}' (calendar month "
+                  f"is '{tab}') — catching up that bill")
+
+        stage_process(state, bill_tab, bill_pdf, args.dry_run)
+        stage_announce(state, bill_tab, args.dry_run)
         if not args.dry_run:
             save_state(state)
     except Exception as e:

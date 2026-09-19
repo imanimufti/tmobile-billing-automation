@@ -107,6 +107,13 @@ async function resolveGroupJid(sock, args) {
 }
 
 async function sendToJid(sock, jid, text, imagePath) {
+  if (jid.endsWith('@g.us')) {
+    // Warm the group's metadata (participant list) so Baileys can distribute
+    // the sender key. A cold --group-id send — where we never called
+    // groupFetchAllParticipating (the name path does) — can otherwise fail
+    // silently while 1:1 DMs succeed.
+    try { await sock.groupMetadata(jid); } catch (e) { /* best effort */ }
+  }
   if (imagePath) {
     await sock.sendMessage(jid, { image: fs.readFileSync(imagePath), caption: text || '' });
   } else {
