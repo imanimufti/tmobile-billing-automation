@@ -42,7 +42,8 @@ class GoogleSheetsUpdater:
 
     def authenticate(self, credentials_path: str = "credentials.json"):
         """Authenticate with Google Sheets API"""
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+        from google_scopes import GOOGLE_SCOPES
+        SCOPES = GOOGLE_SCOPES
 
         creds = None
         creds_file = Path(credentials_path)

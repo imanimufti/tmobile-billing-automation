@@ -52,11 +52,8 @@ except ImportError:
 
 import urllib.request
 
-SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive',
-]
+from google_scopes import GOOGLE_SCOPES
+SCOPES = GOOGLE_SCOPES
 
 
 # US ANSI key codes
