@@ -266,6 +266,12 @@ class GoogleSheetsUpdater:
             # Skip Mobile Internet lines whose cost is folded into an owner row
             if line['line_type'] == 'Mobile Internet' and mi_owners.get(line['last4']):
                 continue
+            # A removed line has no payer of its own: its cost is either charged
+            # to an owner (equipment_owners) or folded into the equal split, and
+            # both already appear on the payers' rows. Its own row is just noise
+            # (an "Unused Line" at $0.00), so leave it out of the breakdown.
+            if line['is_removed']:
+                continue
 
             last4 = line['last4']
             name = self.phone_mapping.get(last4, f"Unknown ({last4})")
@@ -288,15 +294,6 @@ class GoogleSheetsUpdater:
             account_holder_last4 = self.config.get('account_holder_last4')
             payment_status = "Paid" if last4 == account_holder_last4 else "Pending"
             note_parts = []
-            if line.get('reassigned_to'):
-                owner_name = self.phone_mapping.get(line['reassigned_to'], line['reassigned_to'])
-                note_parts.append(
-                    f"Installment ${line.get('reassign_amount', 0):.2f} charged to {owner_name}"
-                )
-            elif line['is_removed']:
-                note_parts.append(
-                    f"Removed — ${line['total']:.2f} split equally across active lines"
-                )
             if mi_extra > 0:
                 note_parts.append(f"Includes ${mi_extra:.2f} Mobile Internet")
             if eqp_extra > 0:
@@ -356,7 +353,15 @@ class GoogleSheetsUpdater:
         if len(values) > 2:
             values[2].extend(['', 'Number of lines', str(num_active_lines)])
 
-        # Update the sheet
+        # Update the sheet. Clear the tab's used values first: values().update
+        # only overwrites the cells it writes, so a rebuild that yields FEWER
+        # rows than before (a line dropped) would otherwise leave stale rows —
+        # e.g. a second, out-of-date Total row — stranded below the new data.
+        # (Clearing values leaves header formatting/freeze intact.)
+        self.service.spreadsheets().values().clear(
+            spreadsheetId=self.sheet_id,
+            range=f"{tab_name}!A1:Z100",
+        ).execute()
         range_name = f"{tab_name}!A1"
         body = {'values': values}
 
