@@ -133,6 +133,22 @@ class SmsSource(PaymentSource):
 
     name = "sms"
 
+    @staticmethod
+    def _notify(title: str, message: str) -> None:
+        """Best-effort macOS banner. Zelle payments arrive as SMS, so losing
+        chat.db access silently stops tracking them; surface it instead."""
+        import subprocess
+        safe = message.replace('"', "'")
+        safe_title = title.replace('"', "'")
+        try:
+            subprocess.run(
+                ["osascript", "-e",
+                 f'display notification "{safe}" with title "{safe_title}"'],
+                check=False, capture_output=True,
+            )
+        except Exception:
+            pass
+
     def __init__(self, chat_db_path: str, sms_config: Dict):
         self.chat_db_path = os.path.expanduser(chat_db_path)
         self.zelle_senders = set(sms_config.get('zelle_senders', []))
@@ -148,7 +164,17 @@ class SmsSource(PaymentSource):
         try:
             con = sqlite3.connect(f"file:{self.chat_db_path}?mode=ro", uri=True)
         except sqlite3.Error as err:
-            print(f"[sms] Cannot open chat.db (Full Disk Access required?): {err}")
+            # Full Disk Access is granted per real binary; /usr/bin/python3 is a
+            # shim, so name the interpreter actually running so the grant lands
+            # on the right file. Don't fail silently — Zelle goes untracked.
+            import sys
+            binary = os.path.realpath(sys.executable)
+            print(f"[sms] Cannot open chat.db — Zelle/SMS payments are NOT being "
+                  f"tracked. Grant Full Disk Access to: {binary}  ({err})")
+            self._notify(
+                "T-Mobile bill: Zelle tracking is OFF",
+                f"Can't read Messages (chat.db). Grant Full Disk Access to {binary}",
+            )
             return []
 
         try:
