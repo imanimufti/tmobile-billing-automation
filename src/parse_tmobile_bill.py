@@ -87,7 +87,13 @@ class TMobileBillParser:
         # Longest alternative goes first so the regex engine doesn't stop at "Mobile".
         # Trailing `- Removed` / `- New` / `- Changed` modifier on the phone row is optional
         # and captured loosely so the regex doesn't silently drop newly-added lines.
-        line_pattern = r'\((\d{3})\)\s*(\d{3})-(\d{4})(?:\s*-\s*\w+)?\s+(Mobile\s+Internet|Voice|Data|Account)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2})'
+        # Amounts may be NEGATIVE (credits, e.g. a promo credit larger than the
+        # installment: equipment -$20.83, total -$4.51). Without the optional
+        # leading `-` such a row fails to match and the line vanishes from the
+        # breakdown, which also shrinks the voice-line count everyone's equal
+        # portion is divided by. A lone `-` placeholder stays unambiguous
+        # because the negative-amount branch requires digits.
+        line_pattern = r'\((\d{3})\)\s*(\d{3})-(\d{4})(?:\s*-\s*\w+)?\s+(Mobile\s+Internet|Voice|Data|Account)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2})'
 
         for match in re.finditer(line_pattern, summary_text):
             area_code, prefix, last4, line_type_raw, plans, equipment, services, one_time, total = match.groups()
@@ -111,7 +117,7 @@ class TMobileBillParser:
 
         # Parse Account line separately
         account_match = re.search(
-            r'Account\s+\$?([\d,]+\.\d{2})\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2}|-)?\s+\$?([\d,]+\.\d{2})',
+            r'Account\s+(-?\$?[\d,]+\.\d{2})\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2})',
             summary_text
         )
 
