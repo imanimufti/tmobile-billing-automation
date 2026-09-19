@@ -164,16 +164,21 @@ class SmsSource(PaymentSource):
         try:
             con = sqlite3.connect(f"file:{self.chat_db_path}?mode=ro", uri=True)
         except sqlite3.Error as err:
-            # Full Disk Access is granted per real binary; /usr/bin/python3 is a
-            # shim, so name the interpreter actually running so the grant lands
-            # on the right file. Don't fail silently — Zelle goes untracked.
-            import sys
-            binary = os.path.realpath(sys.executable)
-            print(f"[sms] Cannot open chat.db — Zelle/SMS payments are NOT being "
-                  f"tracked. Grant Full Disk Access to: {binary}  ({err})")
+            # macOS attributes this access to the python that was LAUNCHED
+            # (/usr/bin/python3 for both the launchd agent and Terminal), not
+            # the framework binary it execs — granting the inner python3.9
+            # does nothing. An OS/Xcode update replaces /usr/bin/python3, and
+            # the existing Full Disk Access entry then silently stops matching
+            # while still showing as on: remove it and re-add it. Don't fail
+            # silently — Zelle goes untracked.
+            print("[sms] Cannot open chat.db — Zelle/SMS payments are NOT being "
+                  "tracked. Grant Full Disk Access to /usr/bin/python3 (System "
+                  "Settings > Privacy & Security). If it is already listed and on, "
+                  f"the entry is stale from an update: remove it and re-add it.  ({err})")
             self._notify(
                 "T-Mobile bill: Zelle tracking is OFF",
-                f"Can't read Messages (chat.db). Grant Full Disk Access to {binary}",
+                "Can't read Messages. Re-add /usr/bin/python3 to Full Disk Access "
+                "(remove the old entry first).",
             )
             return []
 
