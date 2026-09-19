@@ -165,17 +165,35 @@ async function runCommand(sock, cmd, args) {
   }
   if (cmd === 'send') {
     const text = getMessageText(args);
+    let targetJid, label;
     if (args.to) {
       const num = String(args.to).replace(/\D/g, '');
       const res = await sock.onWhatsApp(num);
       if (!res || !res[0] || !res[0].exists) fail(`Number ${args.to} is not on WhatsApp`);
-      await sendToJid(sock, res[0].jid, text, args.image);
-      console.log(`✓ Sent ${args.image ? 'image + caption' : 'message'} to "${num}"`);
+      targetJid = res[0].jid; label = num;
     } else {
-      const jid = await resolveGroupJid(sock, args);
-      if (!args.image && !text) fail('Nothing to send (no --message/--message-file and no --image)');
-      await sendToJid(sock, jid, text, args.image);
-      console.log(`✓ Sent ${args.image ? 'image + caption' : 'message'} to "${jid}"`);
+      targetJid = await resolveGroupJid(sock, args); label = targetJid;
+      if (!args.image && !text && !args.document) {
+        fail('Nothing to send (no --message/--message-file, --image or --document)');
+      }
+    }
+    if (args.image || text) {
+      await sendToJid(sock, targetJid, text, args.image);
+      console.log(`✓ Sent ${args.image ? 'image + caption' : 'message'} to "${label}"`);
+    }
+    if (args.document) {
+      // The bill PDF goes as a follow-up message (WhatsApp can't attach two
+      // media to one message) so the group always gets the source bill too.
+      const docPath = String(args.document);
+      if (targetJid.endsWith('@g.us')) {
+        try { await sock.groupMetadata(targetJid); } catch (e) { /* best effort */ }
+      }
+      await sock.sendMessage(targetJid, {
+        document: fs.readFileSync(docPath),
+        mimetype: 'application/pdf',
+        fileName: path.basename(docPath),
+      });
+      console.log(`✓ Sent document ${path.basename(docPath)} to "${label}"`);
     }
     return 0;
   }

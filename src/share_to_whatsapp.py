@@ -363,7 +363,8 @@ def send_image_with_caption_via_applescript(
 
 
 def send_via_whatsapp_web(group_name: str, group_id: str,
-                          image_path: Optional[str], message: str) -> None:
+                          image_path: Optional[str], message: str,
+                          pdf_path: Optional[str] = None) -> None:
     """Send the breakdown via headless WhatsApp Web (Node helper). Works while
     the Mac is locked, unlike the WhatsApp Desktop keystroke path. Prefers the
     stable group_id over the name. Raises on failure so the caller can retry."""
@@ -390,6 +391,8 @@ def send_via_whatsapp_web(group_name: str, group_id: str,
     cmd = [node, str(script), "send", *target, "--message-file", str(msg_file)]
     if image_path:
         cmd += ["--image", image_path]
+    if pdf_path:
+        cmd += ["--document", pdf_path]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         sys.stdout.write(result.stdout)
@@ -399,6 +402,19 @@ def send_via_whatsapp_web(group_name: str, group_id: str,
             raise RuntimeError(f"WhatsApp Web send failed (exit {result.returncode})")
     finally:
         msg_file.unlink(missing_ok=True)
+
+
+def bill_pdf_for_tab(tab_name: str) -> Optional[str]:
+    """Path to the T-Mobile summary bill PDF for a sheet tab like 'Aug 26'
+    (bills/SummaryBillAug2026.pdf), or None if it isn't on disk. The announce
+    always ships the source bill alongside the breakdown when it's available."""
+    import re
+    m = re.match(r'([A-Za-z]{3})\s+(\d{2})$', tab_name.strip())
+    if not m:
+        return None
+    pdf = (Path(__file__).resolve().parent.parent / "bills"
+           / f"SummaryBill{m.group(1).capitalize()}20{m.group(2)}.pdf")
+    return str(pdf) if pdf.exists() else None
 
 
 def main():
@@ -478,6 +494,13 @@ def main():
         export_tab_as_png(creds, spreadsheet_id, data['gid'], png_path)
         print(f"\n✓ Screenshot exported from Google Sheets: {png_path}")
 
+    # Always ship the source bill PDF with the announce when we have it.
+    pdf_path = bill_pdf_for_tab(args.tab_name)
+    if pdf_path:
+        print(f"✓ Bill PDF to attach: {pdf_path}")
+    else:
+        print("⚠  No bill PDF for this tab in bills/ — sending the breakdown only")
+
     if args.render_only:
         print("[render-only] Exiting before clipboard/WhatsApp.")
         return
@@ -490,7 +513,7 @@ def main():
     if send_mode == 'web':
         gid = args.group_id or wa.get('group_id', '')
         gname = args.group_override or wa.get('group_name', '')
-        send_via_whatsapp_web(gname, gid, png_path, message)
+        send_via_whatsapp_web(gname, gid, png_path, message, pdf_path)
         print("✓ Sent via WhatsApp Web")
         return
 
