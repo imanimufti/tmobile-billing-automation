@@ -301,7 +301,8 @@ def _tab_pdf_issue_date(tab: str) -> Optional[datetime]:
     return None
 
 
-def stage_remind(monitor, state: Dict, tab: str, dry_run: bool) -> None:
+def stage_remind(monitor, state: Dict, tab: str, dry_run: bool,
+                 force: bool = False) -> None:
     """DM each person still unpaid past the reminder thresholds. Respects the
     couples rule: a dependent's (e.g. Tuba's) reminder is rolled into the
     responsible payer's (Qasim's) DM, since the payer covers them."""
@@ -332,7 +333,10 @@ def stage_remind(monitor, state: Dict, tab: str, dry_run: bool) -> None:
         print("[remind] No reference date (announce/issue) for this bill — skipping")
         return
     days = (datetime.now() - ref).days
-    if days < first_after:
+    # --force (ad-hoc --remind-tab only) skips the two timers so an on-demand
+    # "nudge everyone still unpaid" goes out now; the announced guard, the
+    # paid-status check and timestamp recording still apply.
+    if days < first_after and not force:
         print(f"[remind] Bill is {days} day(s) old (< {first_after}) — no reminders yet")
         return
 
@@ -364,7 +368,7 @@ def stage_remind(monitor, state: Dict, tab: str, dry_run: bool) -> None:
             print(f"[remind] No WhatsApp number for {payer} — skipping")
             continue
         last_iso = rstate.get(payer)
-        if last_iso:
+        if last_iso and not force:
             if (now - datetime.fromisoformat(last_iso)).days < repeat_every:
                 continue  # reminded recently
         msg = template.format(name=payer, tab=tab, amount=f"{amount:.2f}", methods=methods_str)
@@ -418,6 +422,9 @@ def main():
                         help="Never attempt the T-Mobile download this run")
     parser.add_argument("--remind-tab", default=None,
                         help="Run ONLY the reminder stage for this tab (e.g. 'Apr 26'), then exit")
+    parser.add_argument("--force", action="store_true",
+                        help="With --remind-tab: DM everyone currently unpaid NOW, ignoring the "
+                             "first-reminder and repeat-interval timers (still records timestamps)")
     parser.add_argument("--mark-announced", default=None, metavar="TAB",
                         help="Record that TAB (e.g. 'Aug 26') was posted to the group "
                              "manually: sets announced (starting the reminder clock now) "
@@ -444,7 +451,7 @@ def main():
         monitor = PaymentMonitor()
         monitor.authenticate("credentials.json")
         st = load_state()
-        stage_remind(monitor, st, args.remind_tab, args.dry_run)
+        stage_remind(monitor, st, args.remind_tab, args.dry_run, force=args.force)
         return
 
     print("=" * 64)

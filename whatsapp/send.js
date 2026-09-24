@@ -40,6 +40,21 @@ const QRImage = require('qrcode');
 
 const DATA_PATH = path.join(__dirname, '..', 'state', 'whatsapp_baileys');
 
+// Baileys' Signal layer (libsignal) logs session churn straight to the console,
+// bypassing the logger stub below — and those dumps include ephemeral ratchet
+// private keys. Under launchd stdout is the pipeline log, so drop them. Our own
+// "✓ ..." lines (which the Python callers parse) are unaffected.
+{
+  const NOISE = /^(Closing session|Decrypted message with closed session|Closing open session)/;
+  for (const level of ['log', 'info', 'warn', 'debug']) {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => {
+      if (typeof args[0] === 'string' && NOISE.test(args[0])) return;
+      orig(...args);
+    };
+  }
+}
+
 // Baileys expects a pino-like logger; a silent stub keeps the protocol chatter
 // out of stdout (callers parse stdout) without pulling in pino.
 const logger = {
