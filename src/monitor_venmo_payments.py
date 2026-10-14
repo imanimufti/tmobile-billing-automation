@@ -213,12 +213,19 @@ class SmsSource(PaymentSource):
                 text = self._decode_attributed_body(attributed)
             parsed = None
 
-            if bundle and 'PeerPayment' in bundle:
-                parsed = self._parse_apple_cash(rowid, sender, payload, ts)
-            elif sender and sender in self.zelle_senders and text:
-                parsed = self._parse_zelle(rowid, sender, text, ts)
-            elif sender and sender in self.venmo_senders and text:
-                parsed = self._parse_venmo_sms(rowid, sender, text, ts)
+            try:
+                if bundle and 'PeerPayment' in bundle:
+                    parsed = self._parse_apple_cash(rowid, sender, payload, ts)
+                elif sender and sender in self.zelle_senders and text:
+                    parsed = self._parse_zelle(rowid, sender, text, ts)
+                elif sender and sender in self.venmo_senders and text:
+                    parsed = self._parse_venmo_sms(rowid, sender, text, ts)
+            except Exception as err:
+                # One malformed notification must never abort the whole pass:
+                # that silently stops payment matching and reminders for as
+                # long as the text stays in the look-back window.
+                print(f"[sms] Skipped unparseable notification (row {rowid}): {err}")
+                continue
 
             if parsed:
                 payments.append(parsed)
@@ -303,11 +310,18 @@ class SmsSource(PaymentSource):
             if not m:
                 continue
             g1, g2 = m.group(1), m.group(2)
-            # First pattern: (name, amount). Others: (amount, name).
-            if re.match(r'^\$?[\d,]+', g1):
+            # The patterns capture (name, amount) or (amount, name). Decide by
+            # which group is strictly numeric, not by position: a sender name
+            # in the amount slot once crashed float() and stopped every
+            # payment match for a week. If neither or both look numeric, try
+            # the next pattern; the check after the loop skips the text.
+            is_amt = lambda v: re.fullmatch(r'\$?\d[\d,]*(?:\.\d{2})?', v.strip()) is not None
+            if is_amt(g1) and not is_amt(g2):
                 amount, name = g1, g2
-            else:
+            elif is_amt(g2) and not is_amt(g1):
                 name, amount = g1, g2
+            else:
+                continue
             break
 
         if not amount or not name:
