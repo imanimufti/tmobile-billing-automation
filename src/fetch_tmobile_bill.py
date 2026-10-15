@@ -218,9 +218,18 @@ def fetch_bill(config: Dict, sms_config: Dict, headed: bool = False,
             pass
 
     with sync_playwright() as p:
+        # Use full Chromium ("new headless", channel="chromium") with a normal
+        # user agent and the automation flag off. The default headless shell
+        # is bot-blocked by T-Mobile: the sign-in page answers with a JSON
+        # 408 error, so the login form never appears and no login can start.
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=PROFILE_DIR,
             headless=not headed,
+            channel="chromium",
+            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/141.0.0.0 Safari/537.36"),
+            args=["--disable-blink-features=AutomationControlled"],
             accept_downloads=True,
             viewport={"width": 1280, "height": 900},
         )
@@ -233,7 +242,21 @@ def fetch_bill(config: Dict, sms_config: Dict, headed: bool = False,
             page.goto(tm.get("billing_url"), wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(3000)  # let any auth redirect settle
 
-            if _first_visible(page, sel.get("username", ""), timeout=5000) is None:
+            # A 408 JSON page means the browser was bot-blocked. Say so; it is
+            # not a session problem and a re-seed does not fix it.
+            body_head = page.evaluate(
+                "document.body ? document.body.innerText.slice(0, 200) : ''")
+            if '"status-code":"408"' in body_head or "Request Timeout" in body_head:
+                _dump(page, "blocked-408")
+                raise RuntimeError(
+                    "T-Mobile answered with a 408 error page instead of the sign-in "
+                    "or bill page. The headless browser is bot-blocked.")
+            # Signed in means: not redirected to the sign-in URL, and no login
+            # form. A missing login form alone is not proof (an error page has
+            # none either).
+            on_signin = "signin" in page.url.lower()
+            if (not on_signin
+                    and _first_visible(page, sel.get("username", ""), timeout=5000) is None):
                 print("[fetch] Existing session is signed in")
             else:
                 print("[fetch] Not signed in — logging in with password")
