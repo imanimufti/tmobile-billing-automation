@@ -93,13 +93,18 @@ class TMobileBillParser:
         # breakdown, which also shrinks the voice-line count everyone's equal
         # portion is divided by. A lone `-` placeholder stays unambiguous
         # because the negative-amount branch requires digits.
-        line_pattern = r'\((\d{3})\)\s*(\d{3})-(\d{4})(?:\s*-\s*\w+)?\s+(Mobile\s+Internet|Voice|Data|Account)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2})'
+        line_pattern = r'\((\d{3})\)\s*(\d{3})-(\d{4})(?:\s*-\s*\w+)?\s+(Mobile\s+Internet|Internet|Voice|Data|Account)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2}|-)?\s+(-?\$?[\d,]+\.\d{2})'
 
         for match in re.finditer(line_pattern, summary_text):
             area_code, prefix, last4, line_type_raw, plans, equipment, services, one_time, total = match.groups()
 
             phone = f"({area_code}) {prefix}-{last4}"
             line_type = re.sub(r'\s+', ' ', (line_type_raw or 'Voice')).strip()
+            # T-Mobile renamed the row label "Mobile Internet" to "Internet" on
+            # the Sep 2026 bill. Keep the internal name stable: the equal-split
+            # pool and the owner fold-in key on 'Mobile Internet'.
+            if line_type == 'Internet':
+                line_type = 'Mobile Internet'
 
             line_data = {
                 'phone': phone,
