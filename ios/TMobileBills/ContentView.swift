@@ -116,6 +116,7 @@ struct ContentView: View {
             .confirmationDialog("Send a reminder to everyone still unpaid for \(tab ?? "this month")?",
                                 isPresented: $showRemindConfirm, titleVisibility: .visible) {
                 Button("Send reminders", role: .destructive) { Task { await remind() } }
+                Button("Cancel", role: .cancel) { }
             }
             .onOpenURL { url in
                 Task { await upload(from: url) }

@@ -248,7 +248,11 @@ class Handler(BaseHTTPRequestHandler):
                     tf.write(data)
                     tmp = tf.name
                 from fetch_tmobile_bill import bill_month_from_pdf
-                mon, year = bill_month_from_pdf(tmp)
+                try:
+                    mon, year = bill_month_from_pdf(tmp)
+                except Exception as err:
+                    os.unlink(tmp)  # do not leave the temp copy behind
+                    return self._send(400, {"error": f"Not a T-Mobile summary bill: {err}"})
                 tab = f"{mon} {year[2:]}"
                 dest = ROOT / "bills" / f"SummaryBill{mon}{year}.pdf"
                 if dest.exists():

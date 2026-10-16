@@ -18,8 +18,12 @@ struct SettingsView: View {
                     Button("Test connection") {
                         Task {
                             do {
-                                let host = try await APIClient(baseURL: serverURL, token: token).ping()
-                                result = "Connected to \(host)"
+                                // Use an authenticated call. /api/ping needs no
+                                // token, so it reports success with a bad token.
+                                let client = APIClient(baseURL: serverURL, token: token)
+                                let host = try await client.ping()
+                                let months = try await client.months().months
+                                result = "Connected to \(host) · \(months.count) month tab(s), token OK"
                             } catch {
                                 result = error.localizedDescription
                             }
