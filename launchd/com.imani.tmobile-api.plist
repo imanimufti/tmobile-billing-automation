@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template. scripts/install_launchd.sh substitutes __PYTHON__, __ROOT__ and
+  __PATH__. Keeps the phone app's API running at all times.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.imani.tmobile-api</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>__ROOT__/src/api_server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__PATH__</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__ROOT__/logs/api.log</string>
+    <key>StandardErrorPath</key>
+    <string>__ROOT__/logs/api.log</string>
+</dict>
+</plist>

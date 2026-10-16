@@ -1,0 +1,30 @@
+name: TMobileBills
+options:
+  bundleIdPrefix: com.imani
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: D8HCUZ7WLT
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+targets:
+  TMobileBills:
+    type: application
+    platform: iOS
+    sources: [TMobileBills]
+    info:
+      path: TMobileBills/Info.plist
+      properties:
+        CFBundleDisplayName: T-Mobile Bills
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSLocalNetworkUsageDescription: Connects to the billing server on your Mac.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.imani.tmobilebills
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: T-Mobile Bills
