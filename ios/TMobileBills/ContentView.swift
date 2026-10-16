@@ -117,6 +117,9 @@ struct ContentView: View {
                                 isPresented: $showRemindConfirm, titleVisibility: .visible) {
                 Button("Send reminders", role: .destructive) { Task { await remind() } }
             }
+            .onOpenURL { url in
+                Task { await upload(from: url) }
+            }
         }
     }
 
@@ -147,6 +150,13 @@ struct ContentView: View {
 
     @MainActor private func handleImport(_ result: Result<URL, Error>) async {
         guard case .success(let url) = result else { return }
+        await upload(from: url)
+    }
+
+    /// Shared by the Files picker and by "Share → T-Mobile Bills" from Safari or
+    /// Files: iOS copies the PDF into the app's Inbox and opens the app with it.
+    @MainActor private func upload(from url: URL) async {
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         do {
@@ -164,6 +174,8 @@ struct ContentView: View {
             notice = nil
             errorText = error.localizedDescription
         }
+        // Remove the Inbox copy that iOS made for a shared file.
+        if url.path.contains("/Inbox/") { try? FileManager.default.removeItem(at: url) }
     }
 
     @MainActor private func remind() async {
