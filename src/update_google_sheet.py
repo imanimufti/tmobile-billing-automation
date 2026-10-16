@@ -41,52 +41,11 @@ class GoogleSheetsUpdater:
         self.service = None
 
     def authenticate(self, credentials_path: str = "credentials.json"):
-        """Authenticate with Google Sheets API"""
-        from google_scopes import GOOGLE_SCOPES
-        SCOPES = GOOGLE_SCOPES
-
-        creds = None
-        creds_file = Path(credentials_path)
-
-        if creds_file.exists():
-            # Try service account first
-            try:
-                creds = service_account.Credentials.from_service_account_file(
-                    credentials_path, scopes=SCOPES)
-                print("Authenticated using service account")
-            except Exception:
-                # Fall back to OAuth
-                from google_auth_oauthlib.flow import InstalledAppFlow
-                from google.auth.transport.requests import Request
-
-                token_path = Path("token.json")
-                if token_path.exists():
-                    creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-                if not creds or not creds.valid:
-                    if creds and creds.expired and creds.refresh_token:
-                        from google.auth.transport.requests import Request
-                        creds.refresh(Request())
-                    else:
-                        flow = InstalledAppFlow.from_client_secrets_file(
-                            credentials_path, SCOPES)
-                        creds = flow.run_local_server(port=0)
-
-                    # Save credentials
-                    with open(token_path, 'w') as token:
-                        token.write(creds.to_json())
-                print("Authenticated using OAuth")
-        else:
-            raise FileNotFoundError(
-                f"Credentials file not found: {credentials_path}\n"
-                "Please follow these steps:\n"
-                "1. Go to https://console.cloud.google.com/\n"
-                "2. Create a new project or select existing\n"
-                "3. Enable Google Sheets API\n"
-                "4. Create credentials (Service Account or OAuth 2.0)\n"
-                "5. Download and save as 'credentials.json' in project root"
-            )
-
+        """Authenticate with the Google Sheets API. Uses the service account key
+        when present (never expires), else the user OAuth token. The
+        credentials_path argument is kept for callers; google_auth decides."""
+        from google_auth import sheets_drive_credentials
+        creds = sheets_drive_credentials()
         self.service = build('sheets', 'v4', credentials=creds)
 
     def extract_bill_month(self, pdf_path: str) -> str:

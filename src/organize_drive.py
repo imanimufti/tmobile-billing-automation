@@ -23,28 +23,9 @@ FOLDER_NAME = "TMobile Automation"
 
 
 def authenticate():
-    token_path = Path("token.json")
-    creds = None
-    # Read the *granted* scopes straight from the token file — from_authorized_user_file
-    # reports the requested scopes, which would falsely look complete.
-    granted = set()
-    if token_path.exists():
-        try:
-            granted = set(json.loads(token_path.read_text()).get("scopes", []))
-        except Exception:
-            granted = set()
-        if set(SCOPES) <= granted:
-            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-
-    if not creds or not creds.valid or not (set(SCOPES) <= granted):
-        print("Drive access needed — a browser window will open for consent...")
-        flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-        creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
-        print("✓ Authorized (token.json upgraded with Drive access)")
-    return creds
+    """Service account when present (never expires), else the user OAuth token."""
+    from google_auth import sheets_drive_credentials
+    return sheets_drive_credentials()
 
 
 def main():

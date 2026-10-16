@@ -416,41 +416,15 @@ class PaymentMonitor:
         self.sheets_service = None
 
     def authenticate(self, credentials_path: str = "credentials.json"):
-        from google_scopes import GOOGLE_SCOPES
-        SCOPES = GOOGLE_SCOPES
-        creds = None
-        creds_file = Path(credentials_path)
-
-        if not creds_file.exists():
-            raise FileNotFoundError(
-                f"Credentials file not found: {credentials_path}\n"
-                "See README for setup steps."
-            )
-
-        try:
-            creds = service_account.Credentials.from_service_account_file(
-                credentials_path, scopes=SCOPES)
-            print("Authenticated using service account")
-        except Exception:
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from google.auth.transport.requests import Request
-
-            token_path = Path("token.json")
-            if token_path.exists():
-                creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                    creds = flow.run_local_server(port=0)
-                with open(token_path, 'w') as token:
-                    token.write(creds.to_json())
-            print("Authenticated using OAuth")
-
-        self.gmail_service = build('gmail', 'v1', credentials=creds)
-        self.sheets_service = build('sheets', 'v4', credentials=creds)
+        """Sheets via the service account when present (never expires), else the
+        user OAuth token. Gmail is a secondary Venmo source (Venmo also texts)
+        and can only use the user token, which Google may revoke at any time,
+        so it is best-effort: no usable token means no Gmail source, and the
+        pass continues on the text messages."""
+        from google_auth import sheets_drive_credentials, gmail_credentials
+        self.sheets_service = build('sheets', 'v4', credentials=sheets_drive_credentials())
+        gmail_creds = gmail_credentials()
+        self.gmail_service = build('gmail', 'v1', credentials=gmail_creds) if gmail_creds else None
 
     # -- Sources --------------------------------------------------------
 

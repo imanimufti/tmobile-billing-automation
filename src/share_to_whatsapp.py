@@ -62,48 +62,11 @@ _KEY_RETURN = 36
 
 
 def authenticate(credentials_path: str = "credentials.json"):
-    """Return (sheets_service, creds). Mirrors GoogleSheetsUpdater.authenticate
-    but exposes the raw Credentials so callers can hit the Drive export URL
-    directly with a bearer token.
-    """
-    creds_file = Path(credentials_path)
-    if not creds_file.exists():
-        raise FileNotFoundError(
-            f"Credentials file not found: {credentials_path}\nSee README for setup steps."
-        )
-
-    creds = None
-    try:
-        creds = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=SCOPES)
-        print("Authenticated using service account")
-    except Exception:
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
-
-        token_path = Path("token.json")
-        if token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            # Token was issued with a narrower scope set (e.g. before drive.readonly
-            # was added) — force a fresh OAuth flow so the new scope is granted.
-            if creds and not set(SCOPES).issubset(set(creds.scopes or [])):
-                print("OAuth scopes changed (drive.readonly added) — re-authenticating...")
-                token_path.unlink()
-                creds = None
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception:
-                    creds = None
-            if not creds:
-                flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open(token_path, 'w') as token:
-                token.write(creds.to_json())
-        print("Authenticated using OAuth")
-
+    """Return (sheets_service, creds). Service account when present (never
+    expires), else the user OAuth token. The raw creds are exposed so the Drive
+    export can use a bearer token."""
+    from google_auth import sheets_drive_credentials
+    creds = sheets_drive_credentials()
     return build('sheets', 'v4', credentials=creds), creds
 
 
@@ -149,7 +112,7 @@ def export_tab_as_png(creds, spreadsheet_id: str, gid: int,
     Requires drive.readonly OAuth scope so the bearer token can authenticate.
     Landscape orientation prevents column-header truncation.
     """
-    if creds.expired and creds.refresh_token:
+    if not creds.valid:  # works for OAuth and service-account creds
         from google.auth.transport.requests import Request
         creds.refresh(Request())
 
@@ -231,7 +194,7 @@ def ensure_sheet_shareable(creds, spreadsheet_id: str) -> bool:
     """Make sure 'anyone with the link' can view + comment on the sheet.
     Idempotent — returns True if a permission was created/updated, False if
     the right permission was already in place."""
-    if creds.expired and creds.refresh_token:
+    if not creds.valid:  # works for OAuth and service-account creds
         from google.auth.transport.requests import Request
         creds.refresh(Request())
 
