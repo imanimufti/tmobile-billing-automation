@@ -2,12 +2,14 @@ import Foundation
 
 enum APIError: LocalizedError {
     case badURL
+    case badToken
     case http(Int, String)
     case decoding(String)
 
     var errorDescription: String? {
         switch self {
         case .badURL: return "The server address is not a valid URL."
+        case .badToken: return "The token has a character the server cannot read. Paste it again as plain text."
         case .http(let code, let msg): return "Server said \(code): \(msg)"
         case .decoding(let msg): return "Unexpected response: \(msg)"
         }
@@ -31,7 +33,8 @@ final class APIClient {
 
     private func request(_ path: String, method: String = "GET",
                          query: [String: String] = [:],
-                         body: Data? = nil, contentType: String? = nil) throws -> URLRequest {
+                         body: Data? = nil, contentType: String? = nil,
+                         timeout: TimeInterval = 60) throws -> URLRequest {
         guard var comps = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw APIError.badURL
         }
@@ -40,9 +43,13 @@ final class APIClient {
             comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
         guard let url = comps.url else { throw APIError.badURL }
-        var req = URLRequest(url: url, timeoutInterval: 60)
+        // A pasted token can carry a trailing space or a smart quote. Trim it,
+        // and refuse a non-ASCII token here so Settings shows the cause.
+        let tok = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard tok.allSatisfy(\.isASCII) else { throw APIError.badToken }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = method
-        req.setValue(token, forHTTPHeaderField: "X-Token")
+        req.setValue(tok, forHTTPHeaderField: "X-Token")
         if let ct = contentType { req.setValue(ct, forHTTPHeaderField: "Content-Type") }
         req.httpBody = body
         return req
@@ -76,7 +83,8 @@ final class APIClient {
     }
 
     func run() async throws -> RunStatus {
-        try await send(request("/api/run"), as: RunStatus.self)
+        // Short timeout: this is a poll, and a dead Mac must not pin the UI.
+        try await send(request("/api/run", timeout: 10), as: RunStatus.self)
     }
 
     func uploadBill(_ pdf: Data) async throws -> ActionResponse {

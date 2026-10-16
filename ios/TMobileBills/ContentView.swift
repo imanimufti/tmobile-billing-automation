@@ -156,7 +156,13 @@ struct ContentView: View {
     /// Shared by the Files picker and by "Share → T-Mobile Bills" from Safari or
     /// Files: iOS copies the PDF into the app's Inbox and opens the app with it.
     @MainActor private func upload(from url: URL) async {
-        guard !busy else { return }
+        // Remove the Inbox copy that iOS made for a shared file, whatever
+        // happens next, so a drop while busy does not leak it.
+        defer { if url.path.contains("/Inbox/") { try? FileManager.default.removeItem(at: url) } }
+        guard !busy else {
+            notice = "Still working on the last action; share \(url.lastPathComponent) again in a moment."
+            return
+        }
         busy = true
         defer { busy = false }
         do {
@@ -166,41 +172,68 @@ struct ContentView: View {
             notice = "Uploading \(url.lastPathComponent)…"
             let r = try await api.uploadBill(data)
             if let t = r.tab { tab = t }
+            guard r.pipelineStarted != false else {
+                notice = "Saved \(r.saved ?? "bill"), but the Mac is already running a pipeline. Pull to refresh when it finishes."
+                return
+            }
             notice = "Saved \(r.saved ?? "bill"). Pipeline is building \(r.tab ?? "the month") and posting to the group…"
-            await waitForPipeline()
-            notice = "Done: \(r.tab ?? "month") is built and posted."
+            if await waitForPipeline() {
+                notice = "Done: \(r.tab ?? "month") is built and posted."
+            } else {
+                notice = "Lost contact with the Mac while \(r.tab ?? "the month") was building; pull to refresh."
+            }
             await load()
         } catch {
             notice = nil
             errorText = error.localizedDescription
         }
-        // Remove the Inbox copy that iOS made for a shared file.
-        if url.path.contains("/Inbox/") { try? FileManager.default.removeItem(at: url) }
     }
 
     @MainActor private func remind() async {
         guard let t = tab else { return }
+        guard !busy else {
+            notice = "Still working on the last action; try again in a moment."
+            return
+        }
         busy = true
         defer { busy = false }
         do {
-            _ = try await api.remind(tab: t)
+            let r = try await api.remind(tab: t)
+            guard r.pipelineStarted != false else {
+                notice = "The Mac is already running a pipeline. Try the reminder again when it finishes."
+                return
+            }
             notice = "Sending reminders for \(t)…"
-            await waitForPipeline()
-            notice = "Reminders sent for \(t)."
+            if await waitForPipeline() {
+                notice = "Reminders sent for \(t)."
+            } else {
+                notice = "Lost contact with the Mac while sending reminders for \(t); pull to refresh."
+            }
             await load()
         } catch {
             errorText = error.localizedDescription
         }
     }
 
-    @MainActor private func waitForPipeline() async {
-        for _ in 0..<120 {   // up to 4 minutes
+    /// Poll /api/run until the pipeline stops. Bounded by wall clock and by
+    /// consecutive failures, so a Mac that stops answering cannot hold `busy`
+    /// for hours. Returns false when contact was lost or the deadline passed.
+    @MainActor private func waitForPipeline() async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(240)
+        var failures = 0
+        while ContinuousClock.now < deadline {
             try? await Task.sleep(for: .seconds(2))
-            if let r = try? await api.run() {
+            do {
+                let r = try await api.run()
                 runState = r
-                if !r.running { return }
+                failures = 0
+                if !r.running { return true }
+            } catch {
+                failures += 1
+                if failures >= 3 { return false }
             }
         }
+        return false
     }
 }
 

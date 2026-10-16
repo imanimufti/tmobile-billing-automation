@@ -35,7 +35,8 @@ TOKEN_FILE = ROOT / "state" / "api_token.txt"
 STATE_FILE = ROOT / "state" / "pipeline_state.json"
 LOG_FILE = ROOT / "logs" / "pipeline.log"
 PORT = int(os.environ.get("TMOBILE_API_PORT", "8787"))
-TAB_RE = re.compile(r"^[A-Z][a-z]{2} \d{2}$")
+# Name the months. A stray tab like "Old 25" must not reach strptime.
+TAB_RE = re.compile(r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2}$")
 
 
 def load_token() -> str:
@@ -53,15 +54,36 @@ _sheets_lock = threading.Lock()
 
 
 def sheets():
-    """One authenticated Sheets client, made on first use."""
+    """One authenticated Sheets client, made on first use.
+
+    Never run the browser consent flow here. A request thread under launchd
+    has no browser, and the flow would block forever with the lock held. When
+    the token needs re-consent, raise so the request gets a JSON 500."""
     global _sheets
     with _sheets_lock:
         if _sheets is None:
+            from google_auth import sheets_drive_credentials
+            from googleapiclient.discovery import build
             from update_google_sheet import GoogleSheetsUpdater
             u = GoogleSheetsUpdater()
-            u.authenticate("credentials.json")
+            try:
+                creds = sheets_drive_credentials(interactive=False)
+            except RuntimeError as err:
+                raise RuntimeError(
+                    f"Google token needs re-consent; run the pipeline once on the Mac ({err})")
+            u.creds = creds
+            u.service = build("sheets", "v4", credentials=creds)
             _sheets = u
         return _sheets
+
+
+def _http(u):
+    """A fresh transport for one request. httplib2.Http is not thread-safe,
+    and the ThreadingHTTPServer runs requests in parallel, so no two threads
+    may share a socket. The timeout keeps a dead socket from pinning a thread."""
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    return AuthorizedHttp(u.creds, http=httplib2.Http(timeout=30))
 
 
 def _amount(s) -> float:
@@ -74,7 +96,7 @@ def _amount(s) -> float:
 def list_months():
     u = sheets()
     meta = u.service.spreadsheets().get(
-        spreadsheetId=u.sheet_id, fields="sheets.properties.title").execute()
+        spreadsheetId=u.sheet_id, fields="sheets.properties.title").execute(http=_http(u))
     tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
     tabs = [t for t in tabs if TAB_RE.match(t)]
     tabs.sort(key=lambda t: datetime.strptime(t, "%b %y"), reverse=True)
@@ -84,7 +106,7 @@ def list_months():
 def month_status(tab: str):
     u = sheets()
     rows = u.service.spreadsheets().values().get(
-        spreadsheetId=u.sheet_id, range=f"'{tab}'!A1:I40").execute().get("values", [])
+        spreadsheetId=u.sheet_id, range=f"'{tab}'!A1:I40").execute(http=_http(u)).get("values", [])
     pays_for = u.config.get("pays_for", {})
     payer_of = {d: p for p, ds in pays_for.items() for d in ds}
     people = []
@@ -104,9 +126,14 @@ def month_status(tab: str):
     owed = {}
     for p in pending:
         owed[p["payer"]] = round(owed.get(p["payer"], 0.0) + p["total"], 2)
+    # run_pipeline.py rewrites this file in place. A read that lands between
+    # the truncate and the write sees an empty file. Fall back to no flags.
     st = {}
     if STATE_FILE.exists():
-        st = json.loads(STATE_FILE.read_text()).get(tab, {})
+        try:
+            st = json.loads(STATE_FILE.read_text()).get(tab, {}) or {}
+        except (json.JSONDecodeError, OSError, AttributeError):
+            st = {}
     return {
         "tab": tab,
         "people": people,
@@ -124,15 +151,19 @@ def month_status(tab: str):
 
 
 _run = {"running": False, "started": None, "tab": None}
+_run_lock = threading.Lock()
 
 
 def start_pipeline(args, tab=None) -> bool:
     """Run run_pipeline.py in the background, output appended to the pipeline log."""
-    if _run["running"]:
-        return False
+    # Claim the run under the lock before the thread starts, so two POSTs that
+    # land together cannot both spawn run_pipeline.py.
+    with _run_lock:
+        if _run["running"]:
+            return False
+        _run.update(running=True, started=datetime.now().isoformat(timespec="seconds"), tab=tab)
 
     def go():
-        _run.update(running=True, started=datetime.now().isoformat(timespec="seconds"), tab=tab)
         try:
             with open(LOG_FILE, "a") as lf:
                 subprocess.run([sys.executable, "src/run_pipeline.py", *args],
@@ -166,7 +197,11 @@ class Handler(BaseHTTPRequestHandler):
     def _auth(self) -> bool:
         tok = self.headers.get("X-Token") or \
             self.headers.get("Authorization", "").replace("Bearer ", "")
-        if not secrets.compare_digest(tok, TOKEN):
+        # Compare bytes. compare_digest raises TypeError on a non-ASCII str,
+        # and http.server decodes header bytes as Latin-1, so a pasted smart
+        # quote or non-breaking space in the token must still answer 401.
+        tok_b = tok.encode("latin-1", "replace")
+        if not secrets.compare_digest(tok_b, TOKEN.encode()):
             self._send(401, {"error": "bad token"})
             return False
         return True
@@ -180,9 +215,9 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path == "/api/ping":
             return self._send(200, {"ok": True, "host": os.uname().nodename})
-        if not self._auth():
-            return
         try:
+            if not self._auth():
+                return
             if u.path == "/api/months":
                 return self._send(200, {"months": list_months(), "run": _run})
             if u.path == "/api/status":
@@ -199,9 +234,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        if not self._auth():
-            return
         try:
+            if not self._auth():
+                return
             if u.path == "/api/bill":
                 n = int(self.headers.get("Content-Length", "0"))
                 if n <= 0 or n > 30_000_000:
@@ -236,7 +271,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
 
+class Server(ThreadingHTTPServer):
+    # The default backlog of 5 refuses connections when the phone's poll,
+    # pull-to-refresh and status calls land together.
+    request_queue_size = 32
+
+
 if __name__ == "__main__":
     print(f"[api] T-Mobile Bills API on 0.0.0.0:{PORT}  (token: {TOKEN_FILE})")
     sys.stdout.flush()
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    Server(("0.0.0.0", PORT), Handler).serve_forever()
