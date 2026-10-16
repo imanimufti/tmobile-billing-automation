@@ -124,7 +124,8 @@ def read_latest_otp(chat_db_path: str, sender_pattern: str,
                 continue
             m = code_re.search(text)
             if m:
-                print(f"[otp] Found code {m.group(1)}")
+                age = time.time() - (_date_ns / 1e9 + APPLE_EPOCH_OFFSET)
+                print(f"[otp] Found code {m.group(1)} (text is {age:.0f}s old, from {sender})")
                 return m.group(1)
         time.sleep(5)
 
@@ -316,6 +317,92 @@ def fetch_bill(config: Dict, sms_config: Dict, headed: bool = False,
                 print(f"[fetch] Opening bill page {tm.get('billing_url')}")
                 page.goto(tm.get("billing_url"), wait_until="domcontentloaded", timeout=45000)
                 page.wait_for_timeout(3000)
+
+            # --- Step-up verification ("Let's confirm it's you") ---
+            # T-Mobile can challenge a signed-in session that looks like a new
+            # device. Choose the text-code option, read the code from Messages,
+            # enter it, and continue. At most two rounds.
+            code_box_sel = ("input[autocomplete='one-time-code'], input[inputmode='numeric'], "
+                            "input[type='tel'], input[name*='pin' i], input[name*='code' i], "
+                            "input[id*='pin' i], input[id*='code' i], input[name='otp'], #otpTextBox")
+            for _round in range(2):
+                challenged = ("choosemethod" in page.url.lower()
+                              or page.locator("#sms_temp_pin_0").count() > 0)
+                if not challenged:
+                    break
+                print("[fetch] Verification challenge — choosing 'Text a code'")
+                # Best effort: clear a cookie banner that could block clicks.
+                for dismiss in ("#onetrust-reject-all-handler", "#close-pc-btn-handler"):
+                    try:
+                        page.locator(dismiss).first.click(timeout=1500)
+                    except Exception:
+                        pass
+                try:
+                    page.locator("#sms_temp_pin_0").check(force=True, timeout=5000)
+                except Exception:
+                    try:
+                        page.locator("label[for='sms_temp_pin_0']").first.click(timeout=5000)
+                    except Exception:
+                        page.get_by_text("Text a code", exact=False).first.click(timeout=5000)
+                challenge_started = time.time()
+                cont = _first_visible(page, "button[type='submit']", timeout=5000)
+                if cont:
+                    cont.click()
+                page.wait_for_timeout(4000)
+                box = _first_visible(page, code_box_sel, timeout=15000)
+                if not box:
+                    _dump(page, "stepup-no-code-box")
+                    found = page.evaluate(
+                        "() => Array.from(document.querySelectorAll('input')).map(e => "
+                        "[e.id, e.name, e.type, e.getAttribute('autocomplete') || ''])")
+                    raise RuntimeError(
+                        "Verification: could not find the code field. Inputs on page: "
+                        f"{found}")
+                code = read_latest_otp(
+                    sms_config.get("chat_db_path", "~/Library/Messages/chat.db"),
+                    tm.get("otp_sender_pattern", "T-?Mobile"),
+                    since_ts=challenge_started,
+                    max_wait=int(tm.get("otp_max_wait_seconds", 150)),
+                )
+                if not code:
+                    _dump(page, "stepup-otp-timeout")
+                    raise RuntimeError(
+                        "Verification code did not arrive in Messages within the wait time.")
+                print("[fetch] Entering verification code")
+                boxes = page.locator(code_box_sel)
+                if boxes.count() == len(code):
+                    # One digit per box.
+                    for i, ch in enumerate(code):
+                        boxes.nth(i).click()
+                        boxes.nth(i).type(ch, delay=60)
+                else:
+                    # Keystrokes, not fill(): the Angular form validates on key
+                    # events and keeps Continue disabled after a plain fill().
+                    box.click()
+                    box.fill("")
+                    box.type(code, delay=80)
+                try:  # reduce future challenges when the page offers it
+                    page.get_by_label(re.compile(r"remember|trust", re.I)).first.check(timeout=1500)
+                except Exception:
+                    pass
+                try:
+                    # Wait for the form to enable the button, then click it.
+                    page.wait_for_function(
+                        "() => { const b = document.querySelector(\"button[type='submit']\");"
+                        " return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true'; }",
+                        timeout=10000)
+                    page.locator("button[type='submit']").first.click(timeout=5000)
+                except Exception:
+                    box.press("Enter")
+                page.wait_for_timeout(5000)
+                _dump(page, f"stepup-after-submit-{_round + 1}")
+                shown = page.evaluate(
+                    "document.body ? document.body.innerText.replace(/\\s+/g,' ').slice(0, 220) : ''")
+                print(f"[fetch] After submit: url={page.url[:90]}")
+                print(f"[fetch] After submit: page says: {shown!r}")
+                if "bill" not in page.url.lower():
+                    page.goto(tm.get("billing_url"), wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(3000)
 
             # Success is defined by actually reaching the download control on the
             # bill page — not by a guessed marker.
