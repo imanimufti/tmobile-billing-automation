@@ -38,3 +38,4 @@ node_modules/
 *~
 ios/*.xcodeproj/
 ios/build/
+ios/build-device/
