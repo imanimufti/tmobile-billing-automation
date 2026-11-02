@@ -19,6 +19,7 @@ token.json*
 
 # Personal data
 bills/*.pdf
+bills/*.png
 
 # Automation runtime (local state, logs, browser profile)
 state/
